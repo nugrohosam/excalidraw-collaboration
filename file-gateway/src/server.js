@@ -181,6 +181,11 @@ io.on("connection", (socket) => {
       return;
     }
 
+    if (isEmptyRealtimeScene(scene)) {
+      ack?.({ ok: true, ignored: true });
+      return;
+    }
+
     const payload = {
       scene,
       updatedAt: new Date().toISOString(),
@@ -207,7 +212,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     socket.to(room).emit("pointer:leave", {
       fileId,
       user: {
@@ -216,6 +221,10 @@ io.on("connection", (socket) => {
       }
     });
     emitPresence(room, fileId);
+    const remainingSockets = await io.in(room).fetchSockets();
+    if (remainingSockets.length === 0) {
+      realtimeScenes.delete(fileId);
+    }
   });
 });
 
@@ -239,6 +248,10 @@ function discoveryResponse() {
 
 function realtimeRoom(fileId) {
   return `oss:file:${fileId}`;
+}
+
+function isEmptyRealtimeScene(scene) {
+  return !scene || !Array.isArray(scene.elements) || scene.elements.length === 0;
 }
 
 async function emitPresence(room, fileId) {

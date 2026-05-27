@@ -28,6 +28,10 @@ function App() {
   const pointerTimerRef = useRef(null);
   const pointerAreaRef = useRef(null);
   const pendingRemoteSceneRef = useRef(null);
+  const initialSceneHadElementsRef = useRef(false);
+  const loadedInitialSceneRef = useRef(false);
+  const acceptedLocalChangeRef = useRef(false);
+  const lastEmittedSceneHashRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +56,10 @@ function App() {
         latestSceneRef.current = null;
         pendingRemoteSceneRef.current = null;
         applyingRemoteRef.current = false;
+        initialSceneHadElementsRef.current = false;
+        loadedInitialSceneRef.current = false;
+        acceptedLocalChangeRef.current = false;
+        lastEmittedSceneHashRef.current = "";
         window.clearTimeout(emitTimerRef.current);
         window.clearTimeout(pointerTimerRef.current);
 
@@ -72,6 +80,8 @@ function App() {
           files: contents.files || {}
         });
         latestSceneRef.current = normalizeScene(contents);
+        initialSceneHadElementsRef.current = hasAnyElements(contents.elements);
+        loadedInitialSceneRef.current = true;
         setLoadState({ status: "ready", message: "" });
       } catch (error) {
         if (!cancelled) {
@@ -153,6 +163,10 @@ function App() {
   }, [accessToken, fileId, gatewayUrl, loadState.status]);
 
   const handleChange = useCallback((elements, appState, files) => {
+    if (!loadedInitialSceneRef.current) {
+      return;
+    }
+
     const scene = {
       type: "excalidraw",
       version: 2,
@@ -161,13 +175,20 @@ function App() {
       appState: sanitizeAppState(appState),
       files: files || {}
     };
-    latestSceneRef.current = scene;
 
     if (applyingRemoteRef.current) {
       applyingRemoteRef.current = false;
+      latestSceneRef.current = scene;
+      acceptedLocalChangeRef.current = true;
       return;
     }
 
+    if (!acceptedLocalChangeRef.current && initialSceneHadElementsRef.current && !hasAnyElements(elements)) {
+      return;
+    }
+
+    latestSceneRef.current = scene;
+    acceptedLocalChangeRef.current = true;
     queueRealtimeScene(scene);
 
     if (saveState.status === "saved") {
@@ -296,9 +317,15 @@ function App() {
       return;
     }
 
+    const sceneHash = realtimeSceneHash(scene);
+    if (sceneHash === lastEmittedSceneHashRef.current || !hasAnyElements(scene.elements)) {
+      return;
+    }
+
     window.clearTimeout(emitTimerRef.current);
     emitTimerRef.current = window.setTimeout(() => {
       socket.emit("scene:update", realtimeScene(scene));
+      lastEmittedSceneHashRef.current = sceneHash;
     }, 250);
   }
 
@@ -389,6 +416,17 @@ function realtimeScene(scene) {
     elements: scene.elements || [],
     files: scene.files || {}
   };
+}
+
+function realtimeSceneHash(scene) {
+  return JSON.stringify({
+    elements: scene.elements || [],
+    files: scene.files || {}
+  });
+}
+
+function hasAnyElements(elements) {
+  return Array.isArray(elements) && elements.length > 0;
 }
 
 function documentAppState(appState) {
