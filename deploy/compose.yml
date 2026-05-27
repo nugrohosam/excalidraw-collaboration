@@ -1,5 +1,7 @@
 services:
   app:
+    env_file:
+      - .env
     image: alswl/excalidraw:v0.18.1-fork-b2
     platform: linux/amd64
     restart: unless-stopped
@@ -16,6 +18,8 @@ services:
     - "9013:80"
 
   storage:
+    env_file:
+        - .env
     image: alswl/excalidraw-storage-backend:v2023.11.11
     platform: linux/amd64
     restart: unless-stopped
@@ -25,6 +29,8 @@ services:
       - "9014:8080"
 
   room:
+    env_file:
+        - .env
     image: excalidraw/excalidraw-room:sha-49bf529
     platform: linux/amd64
     restart: unless-stopped
@@ -32,6 +38,8 @@ services:
       - "9015:80"
 
   file-editor:
+    env_file:
+      - .env
     build:
       context: ../file-editor
     restart: unless-stopped
@@ -39,6 +47,8 @@ services:
       - "9017:80"
 
   file-gateway:
+    env_file:
+        - .env
     build:
       context: ../file-gateway
     restart: unless-stopped
@@ -63,6 +73,8 @@ services:
       - "9016:8090"
 
   mongodb:
+    env_file:
+      - .env
     image: mongo:7.0.5-jammy
     restart: unless-stopped
     environment:
