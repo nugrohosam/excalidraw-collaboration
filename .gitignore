@@ -3,3 +3,4 @@ deploy/mongo-data/
 .env
 node_modules
 dist
+*-lock.json
