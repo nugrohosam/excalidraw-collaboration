@@ -271,7 +271,7 @@ function App() {
       pendingRemoteSceneRef.current = payload;
       setInitialData({
         elements: scene.elements || [],
-        appState: scene.appState || {},
+        appState: documentAppState(scene.appState || {}),
         files: scene.files || {}
       });
       latestSceneRef.current = normalizeScene(scene);
@@ -286,8 +286,7 @@ function App() {
     }
 
     excalidrawApiRef.current.updateScene({
-      elements: scene.elements || [],
-      appState: sanitizeAppState(scene.appState || {})
+      elements: scene.elements || []
     });
   }
 
@@ -299,7 +298,7 @@ function App() {
 
     window.clearTimeout(emitTimerRef.current);
     emitTimerRef.current = window.setTimeout(() => {
-      socket.emit("scene:update", scene);
+      socket.emit("scene:update", realtimeScene(scene));
     }, 250);
   }
 
@@ -379,6 +378,23 @@ function normalizeScene(contents) {
     elements: contents.elements || [],
     appState: sanitizeAppState(contents.appState || {}),
     files: contents.files || {}
+  };
+}
+
+function realtimeScene(scene) {
+  return {
+    type: scene.type,
+    version: scene.version,
+    source: scene.source,
+    elements: scene.elements || [],
+    files: scene.files || {}
+  };
+}
+
+function documentAppState(appState) {
+  const { viewBackgroundColor } = appState || {};
+  return {
+    ...(viewBackgroundColor ? { viewBackgroundColor } : {})
   };
 }
 
