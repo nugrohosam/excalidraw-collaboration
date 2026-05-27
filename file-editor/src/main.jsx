@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import { Excalidraw } from "@excalidraw/excalidraw";
 import { io } from "socket.io-client";
+import * as Y from "yjs";
 import "@excalidraw/excalidraw/index.css";
 import "./styles.css";
 
@@ -24,16 +25,16 @@ function App() {
   const latestSceneRef = useRef(null);
   const socketRef = useRef(null);
   const applyingRemoteRef = useRef(false);
-  const emitTimerRef = useRef(null);
   const pointerTimerRef = useRef(null);
   const pointerAreaRef = useRef(null);
-  const pendingRemoteSceneRef = useRef(null);
   const initialSceneHadElementsRef = useRef(false);
   const loadedInitialSceneRef = useRef(false);
   const acceptedLocalChangeRef = useRef(false);
-  const lastEmittedSceneHashRef = useRef("");
   const previousElementsRef = useRef(new Map());
   const previousFilesRef = useRef(new Map());
+  const ydocRef = useRef(null);
+  const yElementsRef = useRef(null);
+  const yFilesRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,15 +57,16 @@ function App() {
         setRemotePointers({});
         excalidrawApiRef.current = null;
         latestSceneRef.current = null;
-        pendingRemoteSceneRef.current = null;
         applyingRemoteRef.current = false;
         initialSceneHadElementsRef.current = false;
         loadedInitialSceneRef.current = false;
         acceptedLocalChangeRef.current = false;
-        lastEmittedSceneHashRef.current = "";
         previousElementsRef.current = new Map();
         previousFilesRef.current = new Map();
-        window.clearTimeout(emitTimerRef.current);
+        ydocRef.current?.destroy();
+        ydocRef.current = null;
+        yElementsRef.current = null;
+        yFilesRef.current = null;
         window.clearTimeout(pointerTimerRef.current);
 
         const info = await gatewayJson(`${gatewayUrl}/api/oss/files/${encodeURIComponent(fileId)}`, accessToken);
@@ -117,7 +119,31 @@ function App() {
     });
 
     socketRef.current = socket;
+    const ydoc = new Y.Doc();
+    const yElements = ydoc.getMap("elements");
+    const yFiles = ydoc.getMap("files");
+    ydocRef.current = ydoc;
+    yElementsRef.current = yElements;
+    yFilesRef.current = yFiles;
     setCollabState({ status: "connecting", users: [] });
+
+    ydoc.on("update", (update, origin) => {
+      if (origin === "remote" || !socket.connected || !fileInfo?.UserCanWrite) {
+        return;
+      }
+
+      socket.emit("yjs:update", update);
+    });
+
+    const observeYjsScene = (event) => {
+      if (["local", "seed"].includes(event.transaction.origin)) {
+        return;
+      }
+      applyYjsScene();
+    };
+
+    yElements.observe(observeYjsScene);
+    yFiles.observe(observeYjsScene);
 
     socket.on("connect", () => {
       setCollabState((current) => ({ ...current, status: "online" }));
@@ -134,9 +160,18 @@ function App() {
       });
     });
 
-    socket.on("scene:sync", applyRemoteScene);
-    socket.on("scene:update", applyRemoteScene);
-    socket.on("scene:patch", applyRemotePatch);
+    socket.on("yjs:sync", (update) => {
+      Y.applyUpdate(ydoc, toUint8Array(update), "remote");
+
+      if (yElements.size === 0 && yFiles.size === 0) {
+        seedYjsFromScene(latestSceneRef.current);
+      } else {
+        applyYjsScene();
+      }
+    });
+    socket.on("yjs:update", (update) => {
+      Y.applyUpdate(ydoc, toUint8Array(update), "remote");
+    });
     socket.on("pointer:update", (payload) => {
       if (!payload.user?.id || !payload.pointer) {
         return;
@@ -164,10 +199,18 @@ function App() {
     });
 
     return () => {
+      yElements.unobserve(observeYjsScene);
+      yFiles.unobserve(observeYjsScene);
+      ydoc.destroy();
       socket.disconnect();
       socketRef.current = null;
+      if (ydocRef.current === ydoc) {
+        ydocRef.current = null;
+        yElementsRef.current = null;
+        yFilesRef.current = null;
+      }
     };
-  }, [accessToken, fileId, gatewayUrl, loadState.status]);
+  }, [accessToken, fileId, fileInfo?.UserCanWrite, gatewayUrl, loadState.status]);
 
   const handleChange = useCallback((elements, appState, files) => {
     if (!loadedInitialSceneRef.current) {
@@ -197,18 +240,16 @@ function App() {
     }
 
     latestSceneRef.current = scene;
+    const nextElements = elementsById(elements);
+    const nextFiles = filesById(files || {});
     const changedElements = changedElementsSince(previousElementsRef.current, elements);
+    const removedElementIds = removedKeysSince(previousElementsRef.current, nextElements);
     const changedFiles = changedFilesSince(previousFilesRef.current, files || {});
-    previousElementsRef.current = elementsById(elements);
-    previousFilesRef.current = filesById(files || {});
+    const removedFileIds = removedKeysSince(previousFilesRef.current, nextFiles);
+    previousElementsRef.current = nextElements;
+    previousFilesRef.current = nextFiles;
     acceptedLocalChangeRef.current = true;
-    queueRealtimePatch({
-      type: "excalidraw-patch",
-      version: 1,
-      source: "excalidraw-oss-editor",
-      elements: changedElements,
-      files: changedFiles
-    });
+    syncYjsChanges(changedElements, removedElementIds, changedFiles, removedFileIds);
 
     if (saveState.status === "saved") {
       setSaveState({ status: "idle", message: "" });
@@ -287,9 +328,8 @@ function App() {
           key={editorSessionKey}
           excalidrawAPI={(api) => {
             excalidrawApiRef.current = api;
-            if (pendingRemoteSceneRef.current) {
-              applyRemoteScene(pendingRemoteSceneRef.current);
-              pendingRemoteSceneRef.current = null;
+            if (yElementsRef.current?.size) {
+              applyYjsScene();
             }
           }}
           initialData={initialData}
@@ -301,91 +341,97 @@ function App() {
     </main>
   );
 
-  function applyRemoteScene(payload) {
-    const scene = payload.scene || payload;
-    if (!scene) {
+  function seedYjsFromScene(scene) {
+    if (!scene || !fileInfo?.UserCanWrite) {
       return;
     }
 
-    if (!excalidrawApiRef.current) {
-      pendingRemoteSceneRef.current = payload;
-      setInitialData({
-        elements: scene.elements || [],
-        appState: documentAppState(scene.appState || {}),
-        files: scene.files || {}
-      });
-      latestSceneRef.current = normalizeScene(scene);
-      previousElementsRef.current = elementsById(scene.elements || []);
-      previousFilesRef.current = filesById(scene.files || {});
+    const ydoc = ydocRef.current;
+    const yElements = yElementsRef.current;
+    const yFiles = yFilesRef.current;
+    if (!ydoc || !yElements || !yFiles) {
       return;
     }
 
-    applyingRemoteRef.current = true;
-    latestSceneRef.current = normalizeScene(scene);
-    previousElementsRef.current = elementsById(scene.elements || []);
-    previousFilesRef.current = filesById(scene.files || {});
+    ydoc.transact(() => {
+      for (const element of scene.elements || []) {
+        if (element?.id) {
+          yElements.set(element.id, element);
+        }
+      }
 
-    if (scene.files && typeof excalidrawApiRef.current.addFiles === "function") {
-      excalidrawApiRef.current.addFiles(Object.values(scene.files));
-    }
-
-    excalidrawApiRef.current.updateScene({
-      elements: scene.elements || []
-    });
+      for (const [id, file] of Object.entries(scene.files || {})) {
+        yFiles.set(id, file);
+      }
+    }, "seed");
   }
 
-  function applyRemotePatch(payload) {
-    const patch = payload.patch || payload;
-    if (!patch || !Array.isArray(patch.elements) || patch.elements.length === 0) {
+  function syncYjsChanges(changedElements, removedElementIds, changedFiles, removedFileIds) {
+    const ydoc = ydocRef.current;
+    const yElements = yElementsRef.current;
+    const yFiles = yFilesRef.current;
+    if (!ydoc || !yElements || !yFiles || !fileInfo?.UserCanWrite) {
       return;
     }
 
-    const currentElements =
-      typeof excalidrawApiRef.current?.getSceneElements === "function"
-        ? excalidrawApiRef.current.getSceneElements()
-        : latestSceneRef.current?.elements || [];
-    const mergedElements = mergeElements(currentElements, patch.elements);
+    if (
+      changedElements.length === 0 &&
+      removedElementIds.length === 0 &&
+      Object.keys(changedFiles).length === 0 &&
+      removedFileIds.length === 0
+    ) {
+      return;
+    }
 
-    applyingRemoteRef.current = true;
-    previousElementsRef.current = elementsById(mergedElements);
-    previousFilesRef.current = filesById({
-      ...(latestSceneRef.current?.files || {}),
-      ...(patch.files || {})
-    });
+    ydoc.transact(() => {
+      for (const element of changedElements) {
+        if (element?.id) {
+          yElements.set(element.id, element);
+        }
+      }
+
+      for (const elementId of removedElementIds) {
+        yElements.delete(elementId);
+      }
+
+      for (const [id, file] of Object.entries(changedFiles)) {
+        yFiles.set(id, file);
+      }
+
+      for (const fileId of removedFileIds) {
+        yFiles.delete(fileId);
+      }
+    }, "local");
+  }
+
+  function applyYjsScene() {
+    const yElements = yElementsRef.current;
+    const yFiles = yFilesRef.current;
+    if (!yElements || !yFiles) {
+      return;
+    }
+
+    const elements = Array.from(yElements.values());
+    const files = Object.fromEntries(yFiles.entries());
     latestSceneRef.current = {
       ...(latestSceneRef.current || normalizeScene({})),
-      elements: mergedElements,
+      elements,
       files: {
         ...(latestSceneRef.current?.files || {}),
-        ...(patch.files || {})
+        ...files
       }
     };
+    previousElementsRef.current = elementsById(elements);
+    previousFilesRef.current = filesById(latestSceneRef.current.files);
 
-    if (patch.files && typeof excalidrawApiRef.current?.addFiles === "function") {
-      excalidrawApiRef.current.addFiles(Object.values(patch.files));
+    if (typeof excalidrawApiRef.current?.addFiles === "function") {
+      excalidrawApiRef.current.addFiles(Object.values(files));
     }
 
-    excalidrawApiRef.current?.updateScene({
-      elements: mergedElements
-    });
-  }
-
-  function queueRealtimePatch(patch) {
-    const socket = socketRef.current;
-    if (!socket?.connected || !fileInfo?.UserCanWrite) {
-      return;
+    if (excalidrawApiRef.current) {
+      applyingRemoteRef.current = true;
+      excalidrawApiRef.current.updateScene({ elements });
     }
-
-    const sceneHash = realtimeSceneHash(patch);
-    if (sceneHash === lastEmittedSceneHashRef.current || !hasAnyElements(patch.elements)) {
-      return;
-    }
-
-    window.clearTimeout(emitTimerRef.current);
-    emitTimerRef.current = window.setTimeout(() => {
-      socket.emit("scene:patch", patch);
-      lastEmittedSceneHashRef.current = sceneHash;
-    }, 250);
   }
 
   function handlePointerMove(event) {
@@ -467,13 +513,6 @@ function normalizeScene(contents) {
   };
 }
 
-function realtimeSceneHash(scene) {
-  return JSON.stringify({
-    elements: scene.elements || [],
-    files: scene.files || {}
-  });
-}
-
 function elementsById(elements) {
   const map = new Map();
   for (const element of elements || []) {
@@ -522,21 +561,16 @@ function changedFilesSince(previousFiles, files) {
   return changedFiles;
 }
 
-function mergeElements(currentElements, patchElements) {
-  const merged = elementsById(currentElements || []);
+function removedKeysSince(previousMap, nextMap) {
+  const removedKeys = [];
 
-  for (const element of patchElements || []) {
-    if (!element?.id) {
-      continue;
-    }
-
-    const currentElement = merged.get(element.id);
-    if (!currentElement || isElementNewer(element, currentElement)) {
-      merged.set(element.id, element);
+  for (const key of previousMap.keys()) {
+    if (!nextMap.has(key)) {
+      removedKeys.push(key);
     }
   }
 
-  return Array.from(merged.values());
+  return removedKeys;
 }
 
 function isElementNewer(nextElement, currentElement) {
@@ -558,11 +592,20 @@ function hasAnyElements(elements) {
   return Array.isArray(elements) && elements.length > 0;
 }
 
-function documentAppState(appState) {
-  const { viewBackgroundColor } = appState || {};
-  return {
-    ...(viewBackgroundColor ? { viewBackgroundColor } : {})
-  };
+function toUint8Array(value) {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
+  }
+  throw new Error("Expected binary Yjs update");
 }
 
 function sanitizeAppState(appState) {

@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { URL } from "node:url";
 import { Server as SocketIOServer } from "socket.io";
+import * as Y from "yjs";
 
 const config = {
   port: numberEnv("PORT", 8090),
@@ -133,7 +134,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
-const realtimeScenes = new Map();
+const realtimeDocs = new Map();
 const io = new SocketIOServer(server, {
   path: "/oss-socket.io",
   maxHttpBufferSize: config.maxBodyBytes,
@@ -168,47 +169,25 @@ io.on("connection", (socket) => {
 
   socket.join(room);
 
-  const currentState = realtimeScenes.get(fileId);
-  if (currentState) {
-    socket.emit("scene:patch", realtimeStatePayload(currentState));
-  }
+  const ydoc = getRealtimeDoc(fileId);
+  socket.emit("yjs:sync", Y.encodeStateAsUpdate(ydoc));
 
   emitPresence(room, fileId);
 
-  function handleRealtimePatch(patch, ack) {
+  socket.on("yjs:update", (update, ack) => {
     if (claims.permission !== "edit") {
-      ack?.({ ok: false, error: "Token does not allow realtime edits" });
+      ack?.({ ok: false, error: "Token does not allow realtime updates" });
       return;
     }
 
-    if (isEmptyRealtimePatch(patch)) {
-      ack?.({ ok: true, ignored: true });
-      return;
+    try {
+      const binaryUpdate = toUint8Array(update);
+      Y.applyUpdate(ydoc, binaryUpdate, socket.id);
+      socket.to(room).emit("yjs:update", binaryUpdate);
+      ack?.({ ok: true });
+    } catch (error) {
+      ack?.({ ok: false, error: error.message || "Invalid Yjs update" });
     }
-
-    const currentState = realtimeScenes.get(fileId) || createRealtimeState();
-    const merged = mergeRealtimePatch(currentState, patch);
-    realtimeScenes.set(fileId, currentState);
-
-    const payload = {
-      patch: merged,
-      updatedAt: new Date().toISOString(),
-      user: {
-        id: claims.userId,
-        name: claims.userName
-      }
-    };
-
-    if (!isEmptyRealtimePatch(merged)) {
-      socket.to(room).emit("scene:patch", payload);
-    }
-    ack?.({ ok: true, accepted: merged.elements.length });
-  }
-
-  socket.on("scene:patch", handleRealtimePatch);
-
-  socket.on("scene:update", (scene, ack) => {
-    handleRealtimePatch(scene, ack);
   });
 
   socket.on("pointer:update", (pointer) => {
@@ -234,7 +213,9 @@ io.on("connection", (socket) => {
     emitPresence(room, fileId);
     const remainingSockets = await io.in(room).fetchSockets();
     if (remainingSockets.length === 0) {
-      realtimeScenes.delete(fileId);
+      const roomDoc = realtimeDocs.get(fileId);
+      roomDoc?.destroy();
+      realtimeDocs.delete(fileId);
     }
   });
 });
@@ -261,74 +242,29 @@ function realtimeRoom(fileId) {
   return `oss:file:${fileId}`;
 }
 
-function createRealtimeState() {
-  return {
-    elements: new Map(),
-    files: {},
-    updatedAt: null
-  };
-}
-
-function realtimeStatePayload(state) {
-  return {
-    patch: {
-      type: "excalidraw-patch",
-      version: 1,
-      source: "excalidraw-oss-editor",
-      elements: Array.from(state.elements.values()),
-      files: state.files
-    },
-    updatedAt: state.updatedAt
-  };
-}
-
-function mergeRealtimePatch(state, patch) {
-  const acceptedElements = [];
-  const patchElements = Array.isArray(patch?.elements) ? patch.elements : [];
-
-  for (const element of patchElements) {
-    if (!element?.id) {
-      continue;
-    }
-
-    const currentElement = state.elements.get(element.id);
-    if (!currentElement || isElementNewer(element, currentElement)) {
-      state.elements.set(element.id, element);
-      acceptedElements.push(element);
-    }
+function getRealtimeDoc(fileId) {
+  let ydoc = realtimeDocs.get(fileId);
+  if (!ydoc) {
+    ydoc = new Y.Doc();
+    realtimeDocs.set(fileId, ydoc);
   }
-
-  const files = patch?.files && typeof patch.files === "object" ? patch.files : {};
-  state.files = {
-    ...state.files,
-    ...files
-  };
-  state.updatedAt = new Date().toISOString();
-
-  return {
-    type: "excalidraw-patch",
-    version: 1,
-    source: "excalidraw-oss-editor",
-    elements: acceptedElements,
-    files
-  };
+  return ydoc;
 }
 
-function isElementNewer(nextElement, currentElement) {
-  const nextVersion = Number(nextElement.version || 0);
-  const currentVersion = Number(currentElement.version || 0);
-
-  if (nextVersion !== currentVersion) {
-    return nextVersion > currentVersion;
+function toUint8Array(value) {
+  if (value instanceof Uint8Array) {
+    return value;
   }
-
-  return Number(nextElement.versionNonce || 0) !== Number(currentElement.versionNonce || 0);
-}
-
-function isEmptyRealtimePatch(patch) {
-  const hasElements = Array.isArray(patch?.elements) && patch.elements.length > 0;
-  const hasFiles = patch?.files && typeof patch.files === "object" && Object.keys(patch.files).length > 0;
-  return !hasElements && !hasFiles;
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value);
+  }
+  throw new Error("Expected binary Yjs update");
 }
 
 async function emitPresence(room, fileId) {
