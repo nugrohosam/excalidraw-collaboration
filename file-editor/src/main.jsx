@@ -356,12 +356,12 @@ function App() {
     ydoc.transact(() => {
       for (const element of scene.elements || []) {
         if (element?.id) {
-          yElements.set(element.id, element);
+          yElements.set(element.id, cloneData(element));
         }
       }
 
       for (const [id, file] of Object.entries(scene.files || {})) {
-        yFiles.set(id, file);
+        yFiles.set(id, cloneData(file));
       }
     }, "seed");
   }
@@ -386,7 +386,7 @@ function App() {
     ydoc.transact(() => {
       for (const element of changedElements) {
         if (element?.id) {
-          yElements.set(element.id, element);
+          yElements.set(element.id, cloneData(element));
         }
       }
 
@@ -395,7 +395,7 @@ function App() {
       }
 
       for (const [id, file] of Object.entries(changedFiles)) {
-        yFiles.set(id, file);
+        yFiles.set(id, cloneData(file));
       }
 
       for (const fileId of removedFileIds) {
@@ -411,8 +411,8 @@ function App() {
       return;
     }
 
-    const elements = Array.from(yElements.values());
-    const files = Object.fromEntries(yFiles.entries());
+    const elements = cloneData(Array.from(yElements.values()));
+    const files = cloneData(Object.fromEntries(yFiles.entries()));
     latestSceneRef.current = {
       ...(latestSceneRef.current || normalizeScene({})),
       elements,
@@ -517,7 +517,7 @@ function elementsById(elements) {
   const map = new Map();
   for (const element of elements || []) {
     if (element?.id) {
-      map.set(element.id, element);
+      map.set(element.id, cloneData(element));
     }
   }
   return map;
@@ -526,7 +526,7 @@ function elementsById(elements) {
 function filesById(files) {
   const map = new Map();
   for (const [id, file] of Object.entries(files || {})) {
-    map.set(id, file);
+    map.set(id, cloneData(file));
   }
   return map;
 }
@@ -586,6 +586,13 @@ function isElementNewer(nextElement, currentElement) {
 
 function elementHash(element) {
   return JSON.stringify(element || {});
+}
+
+function cloneData(value) {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
 }
 
 function hasAnyElements(elements) {
