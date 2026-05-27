@@ -163,7 +163,7 @@ Stop advanced mode:
 docker compose --env-file .env -f deploy/compose.yml down
 ```
 
-Stop and remove local data volumes/directories only if you intentionally want a clean reset.
+Stop and remove local data volumes only if you intentionally want a clean reset.
 
 ## Smoke Test the OSS Gateway
 
@@ -271,8 +271,9 @@ Local filesystem mode:
 
 ```env
 STORAGE_ADAPTER=filesystem
-FILE_STORAGE_PATH=./file-data
 ```
+
+In filesystem mode, drawings are stored in the Docker named volume `file-data`.
 
 DMS HTTP mode:
 

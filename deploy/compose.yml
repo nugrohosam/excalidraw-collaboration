@@ -1,7 +1,5 @@
 services:
   app:
-    env_file:
-      - .env
     image: alswl/excalidraw:v0.18.1-fork-b2
     platform: linux/amd64
     restart: unless-stopped
@@ -18,8 +16,6 @@ services:
     - "9013:80"
 
   storage:
-    env_file:
-        - .env
     image: alswl/excalidraw-storage-backend:v2023.11.11
     platform: linux/amd64
     restart: unless-stopped
@@ -29,8 +25,6 @@ services:
       - "9014:8080"
 
   room:
-    env_file:
-        - .env
     image: excalidraw/excalidraw-room:sha-49bf529
     platform: linux/amd64
     restart: unless-stopped
@@ -38,8 +32,6 @@ services:
       - "9015:80"
 
   file-editor:
-    env_file:
-      - .env
     build:
       context: ../file-editor
     restart: unless-stopped
@@ -47,8 +39,6 @@ services:
       - "9017:80"
 
   file-gateway:
-    env_file:
-        - .env
     build:
       context: ../file-gateway
     restart: unless-stopped
@@ -68,18 +58,19 @@ services:
       - MAX_BODY_BYTES=${MAX_BODY_BYTES}
       - LOCK_TTL_SECONDS=${LOCK_TTL_SECONDS}
     volumes:
-      - ${FILE_STORAGE_PATH}:/data/files
+      - file-data:/data/files
     ports:
       - "9016:8090"
 
   mongodb:
-    env_file:
-      - .env
     image: mongo:7.0.5-jammy
     restart: unless-stopped
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${DB_USER}
       - MONGO_INITDB_ROOT_PASSWORD=${DB_PASS}
     volumes:
-      - ${DB_VOLUME_PATH}:/data/db
-    user: "1000"
+      - mongo-data:/data/db
+
+volumes:
+  file-data:
+  mongo-data:
