@@ -90,10 +90,9 @@ const server = createServer(async (req, res) => {
         const content = await readTextBody(req);
         JSON.parse(content);
         const result = await storage.putFileContents(fileId, content, {
+          ...claims,
           expectedVersion: req.headers["x-file-version"],
           lockId: req.headers["x-lock"],
-          userId: claims.userId,
-          userName: claims.userName
         });
         return sendJson(res, 200, result);
       }
