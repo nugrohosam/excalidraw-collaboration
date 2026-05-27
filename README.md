@@ -291,6 +291,17 @@ When `STORAGE_ADAPTER=http`, the gateway calls your DMS:
 - `POST /files/:fileId/lock`
 - `POST /files/:fileId/unlock`
 
+The public browser-facing endpoints and DMS-facing endpoints are intentionally
+different:
+
+| Browser calls gateway | Gateway calls DMS |
+| --- | --- |
+| `GET /api/oss/files/:fileId` | `GET {HOST_STORAGE_BASE_URL}/files/:fileId` |
+| `GET /api/oss/files/:fileId/contents` | `GET {HOST_STORAGE_BASE_URL}/files/:fileId/contents` |
+| `PUT /api/oss/files/:fileId/contents` | `PUT {HOST_STORAGE_BASE_URL}/files/:fileId/contents` |
+| `POST /api/oss/files/:fileId/lock` | `POST {HOST_STORAGE_BASE_URL}/files/:fileId/lock` |
+| `POST /api/oss/files/:fileId/unlock` | `POST {HOST_STORAGE_BASE_URL}/files/:fileId/unlock` |
+
 For every DMS call, the gateway forwards:
 
 - `Authorization: Bearer {HOST_STORAGE_API_KEY}`
@@ -300,9 +311,63 @@ For every DMS call, the gateway forwards:
 - `X-File-Url`
 - `X-File-Name`
 
+These headers are derived from the signed editor session token created by
+`POST /api/files/:fileId/sessions`. Keep the full session claims available on
+every gateway-to-DMS call, including saves. In particular, the save path
+`PUT /api/oss/files/:fileId/contents` must forward the same user/file claims as
+read/open:
+
+- `userId`
+- `userName`
+- `permission`
+- `fileUrl`
+- `fileName`
+
+Do not pass only save-specific options such as `expectedVersion`, `lockId`,
+`userId`, and `userName` to the HTTP DMS adapter. If `permission` is dropped,
+the gateway cannot send `X-User-Permission`, and a DMS that enforces write
+authorization should reject the save.
+
+For save requests, the DMS should expect both the session context and
+save-specific headers:
+
+```http
+PUT {HOST_STORAGE_BASE_URL}/files/:fileId/contents
+Authorization: Bearer {HOST_STORAGE_API_KEY}
+X-User-Id: user-1
+X-User-Name: Demo User
+X-User-Permission: edit
+X-File-Url: https://dms.example.com/files/demo.excalidraw
+X-File-Name: demo.excalidraw
+X-File-Version: 42
+X-Lock: lock-123
+Content-Type: application/json; charset=utf-8
+```
+
+`X-File-Version` and `X-Lock` are conditional, but `X-User-Permission` is not
+optional for a DMS that validates save authorization.
+
+If DMS returns an error like:
+
+```json
+{"error":"Missing X-User-Permission","code":"FORBIDDEN"}
+```
+
+do not weaken DMS authorization. Check the gateway `PUT
+/api/oss/files/:fileId/contents` handler and ensure it passes the full token
+claims into `storage.putFileContents`, for example:
+
+```js
+await storage.putFileContents(fileId, content, {
+  ...claims,
+  expectedVersion: req.headers["x-file-version"],
+  lockId: req.headers["x-lock"]
+});
+```
+
 The full DMS API contract is in [docs/oss-api.md](./docs/oss-api.md).
 
-Important: setting `STORAGE_ADAPTER=http` makes the OSS gateway call your DMS when the wrapper loads or saves the file. Realtime edits are shared through the gateway's in-memory OSS socket channel; persistence still happens only on explicit Save.
+Important: setting `STORAGE_ADAPTER=http` makes the OSS gateway call your DMS when the wrapper loads or saves the file. Realtime edits are shared through the gateway's in-memory Yjs socket channel; persistence still happens only on explicit Save.
 
 ## Configure Nginx for Production
 
@@ -364,7 +429,8 @@ For production, update at least:
 
 - Browser crypto APIs require HTTPS in production. Localhost is allowed by browsers, but public HTTP domains can fail.
 - `TOKEN_SECRET`, `HOST_API_KEY`, `DB_PASS`, and `HOST_STORAGE_API_KEY` must be changed before production use.
-- The OSS editor syncs active users with the same `file_id` through an in-memory realtime channel. A user must still click Save to persist the current drawing to the gateway/DMS.
+- The OSS editor syncs active users with the same `file_id` through an in-memory Yjs realtime channel. A user must still click Save to persist the current drawing to the gateway/DMS.
+- DMS integrations should require and validate `X-User-Permission` on save. If a save reaches DMS without that header, fix the gateway claim-forwarding path instead of weakening DMS authorization.
 - The `deploy/` stack is the path for DMS integration.
 
 ## Docs

@@ -243,13 +243,12 @@ function App() {
     const nextElements = elementsById(elements);
     const nextFiles = filesById(files || {});
     const changedElements = changedElementsSince(previousElementsRef.current, elements);
-    const removedElementIds = removedKeysSince(previousElementsRef.current, nextElements);
     const changedFiles = changedFilesSince(previousFilesRef.current, files || {});
     const removedFileIds = removedKeysSince(previousFilesRef.current, nextFiles);
     previousElementsRef.current = nextElements;
     previousFilesRef.current = nextFiles;
     acceptedLocalChangeRef.current = true;
-    syncYjsChanges(changedElements, removedElementIds, changedFiles, removedFileIds);
+    syncYjsChanges(changedElements, changedFiles, removedFileIds);
 
     if (saveState.status === "saved") {
       setSaveState({ status: "idle", message: "" });
@@ -366,7 +365,7 @@ function App() {
     }, "seed");
   }
 
-  function syncYjsChanges(changedElements, removedElementIds, changedFiles, removedFileIds) {
+  function syncYjsChanges(changedElements, changedFiles, removedFileIds) {
     const ydoc = ydocRef.current;
     const yElements = yElementsRef.current;
     const yFiles = yFilesRef.current;
@@ -376,7 +375,6 @@ function App() {
 
     if (
       changedElements.length === 0 &&
-      removedElementIds.length === 0 &&
       Object.keys(changedFiles).length === 0 &&
       removedFileIds.length === 0
     ) {
@@ -388,10 +386,6 @@ function App() {
         if (element?.id) {
           yElements.set(element.id, cloneData(element));
         }
-      }
-
-      for (const elementId of removedElementIds) {
-        yElements.delete(elementId);
       }
 
       for (const [id, file] of Object.entries(changedFiles)) {
@@ -411,7 +405,7 @@ function App() {
       return;
     }
 
-    const elements = cloneData(Array.from(yElements.values()));
+    const elements = mergeElementsById(latestSceneRef.current?.elements || [], Array.from(yElements.values()));
     const files = cloneData(Object.fromEntries(yFiles.entries()));
     latestSceneRef.current = {
       ...(latestSceneRef.current || normalizeScene({})),
@@ -559,6 +553,18 @@ function changedFilesSince(previousFiles, files) {
   }
 
   return changedFiles;
+}
+
+function mergeElementsById(currentElements, incomingElements) {
+  const merged = elementsById(currentElements || []);
+
+  for (const element of incomingElements || []) {
+    if (element?.id) {
+      merged.set(element.id, cloneData(element));
+    }
+  }
+
+  return Array.from(merged.values());
 }
 
 function removedKeysSince(previousMap, nextMap) {

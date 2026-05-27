@@ -423,6 +423,21 @@ X-File-Url: https://dms.example.com/files/demo.excalidraw
 X-File-Name: demo.excalidraw
 ```
 
+These headers come from the signed browser access token created by
+`POST /api/files/{fileId}/sessions`. The gateway must preserve the full token
+claims when forwarding any request to DMS:
+
+- `userId`
+- `userName`
+- `permission`
+- `fileUrl`
+- `fileName`
+
+This applies to read/open, save, lock, and unlock. Save handling must not reduce
+the forwarded claims to only save options such as `expectedVersion`, `lockId`,
+`userId`, and `userName`; otherwise `X-User-Permission`, `X-File-Url`, and
+`X-File-Name` can be lost.
+
 Save requests can also receive:
 
 ```http
@@ -472,6 +487,22 @@ PUT /files/{fileId}/contents
 ```
 
 Request body is raw `.excalidraw` JSON.
+
+Expected authorization/context headers:
+
+```http
+Authorization: Bearer {HOST_STORAGE_API_KEY}
+X-User-Id: user-2
+X-User-Name: User Two
+X-User-Permission: edit
+X-File-Url: https://dms.example.com/files/demo.excalidraw
+X-File-Name: demo.excalidraw
+X-File-Version: 42
+X-Lock: lock-123
+```
+
+`X-File-Version` and `X-Lock` are conditional, but `X-User-Permission` should
+be present whenever the DMS enforces save authorization.
 
 Response:
 
