@@ -4,10 +4,9 @@ A self-hosted Excalidraw stack with live collaboration, scene/image storage, Doc
 
 The core Excalidraw collaboration stack is usable today. The newer OSS/DMS path now supports opening a file through a wrapper, lightweight same-file realtime sync between wrapper users, and explicit Save back to the gateway/DMS.
 
-This repo has two deployment modes:
+This repo has one main deployment mode:
 
-- `basic/`: local Excalidraw collaboration demo.
-- `advanced-nginx/`: production-style deployment with HTTPS nginx routing, MongoDB-backed Excalidraw storage, the OSS gateway API, and the OSS editor wrapper.
+- `deploy/`: Docker Compose deployment with HTTPS nginx routing, MongoDB-backed Excalidraw storage, the OSS gateway API, and the OSS editor wrapper.
 
 ## Capability Status
 
@@ -16,8 +15,7 @@ Stable today:
 - Self-hosted Excalidraw web app.
 - Live collaboration using Excalidraw's built-in collaboration flow.
 - Scene/image storage through the Excalidraw storage backend.
-- Basic Docker Compose deployment for local testing.
-- Advanced Docker Compose deployment with MongoDB and nginx routing.
+- Docker Compose deployment with MongoDB and nginx routing.
 
 Experimental OSS/DMS gateway:
 
@@ -42,8 +40,8 @@ Not built yet:
 | --- | --- |
 | `app` / `frontend` | Excalidraw web app. |
 | `room` | WebSocket server for live collaboration. |
-| `storage` | Excalidraw scene/image storage backend. Basic mode uses memory; advanced mode uses MongoDB. |
-| `mongodb` | Persistent database for the Excalidraw storage backend in advanced mode. |
+| `storage` | Excalidraw scene/image storage backend backed by MongoDB. |
+| `mongodb` | Persistent database for the Excalidraw storage backend. |
 | `file-gateway` | OSS gateway API for file sessions, metadata, contents, saves, locks, and DMS adapter calls. |
 | `file-editor` | Experimental wrapper that loads an OSS file, syncs same-file editors in realtime, and saves when the user clicks Save. |
 
@@ -62,54 +60,14 @@ docker compose version
 
 These commands confirm Docker and Compose are installed.
 
-## Run Basic Local Mode
-
-Use this when you only want to try Excalidraw live collaboration locally.
-
-```bash
-docker compose -f basic/docker-compose.yaml up -d
-```
-
-What it does:
-
-- Pulls the Excalidraw frontend image.
-- Pulls the Excalidraw storage backend image.
-- Pulls the Excalidraw room server image.
-- Starts the stack in the background.
-- Exposes Excalidraw on `http://localhost`.
-- Exposes storage on `http://localhost:8081`.
-- Exposes room server on `http://localhost:8082`.
-
-Open:
-
-```bash
-open http://localhost
-```
-
-If you are not on macOS, open `http://localhost` manually in your browser.
-
-View logs:
-
-```bash
-docker compose -f basic/docker-compose.yaml logs -f
-```
-
-Stop basic mode:
-
-```bash
-docker compose -f basic/docker-compose.yaml down
-```
-
-Important: basic mode storage is in-memory because `STORAGE_URI` is not configured. Data can disappear when the storage container restarts.
-
-## Run Advanced Mode Locally
+## Run Locally
 
 Use this when you want the full stack, including MongoDB and the OSS file gateway.
 
 1. Create your env file:
 
 ```bash
-cp advanced-nginx/.env.example advanced-nginx/.env
+cp .env.example .env
 ```
 
 What it does:
@@ -120,7 +78,7 @@ What it does:
 2. Edit the env file:
 
 ```bash
-nano advanced-nginx/.env
+nano .env
 ```
 
 At minimum, change:
@@ -149,12 +107,12 @@ Direct local testing uses the editor on `http://localhost:9017` and passes `gate
 3. Validate the Compose file:
 
 ```bash
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml config
+docker compose --env-file .env -f deploy/compose.yml config
 ```
 
 What it does:
 
-- Reads `advanced-nginx/.env`.
+- Reads `.env`.
 - Resolves all `${VARIABLE}` values in `compose.yml`.
 - Prints the final Docker Compose config.
 - Fails early if required variables are missing.
@@ -162,7 +120,7 @@ What it does:
 4. Start the advanced stack:
 
 ```bash
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml up -d --build
+docker compose --env-file .env -f deploy/compose.yml up -d --build
 ```
 
 What it does:
@@ -180,7 +138,7 @@ What it does:
 5. Check running containers:
 
 ```bash
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml ps
+docker compose --env-file .env -f deploy/compose.yml ps
 ```
 
 What it does:
@@ -191,7 +149,7 @@ What it does:
 6. View logs:
 
 ```bash
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml logs -f
+docker compose --env-file .env -f deploy/compose.yml logs -f
 ```
 
 What it does:
@@ -202,7 +160,7 @@ What it does:
 Stop advanced mode:
 
 ```bash
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml down
+docker compose --env-file .env -f deploy/compose.yml down
 ```
 
 Stop and remove local data volumes/directories only if you intentionally want a clean reset.
@@ -347,7 +305,16 @@ Important: setting `STORAGE_ADAPTER=http` makes the OSS gateway call your DMS wh
 
 ## Configure Nginx for Production
 
-Use [advanced-nginx/draw.example.com.conf](./advanced-nginx/draw.example.com.conf) as the nginx server block.
+Use [deploy/nginx.conf](./deploy/nginx.conf) as the nginx server block.
+
+The config uses `server_name _;`, so it can catch whichever domain points at this server. Keep the real public domain in `.env` with `APP_HOST`, `ROOM_HOST`, `STORAGE_BACKEND_HOST`, and `ALLOWED_ORIGINS`.
+
+Only the certificate paths in the nginx file need to match the certificate created by Certbot:
+
+```nginx
+ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+```
 
 It routes:
 
@@ -373,11 +340,11 @@ What it does:
 Before deploying:
 
 ```bash
-cp advanced-nginx/.env.example advanced-nginx/.env
-nano advanced-nginx/.env
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml config
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml up -d --build
-docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml ps
+cp .env.example .env
+nano .env
+docker compose --env-file .env -f deploy/compose.yml config
+docker compose --env-file .env -f deploy/compose.yml up -d --build
+docker compose --env-file .env -f deploy/compose.yml ps
 ```
 
 For production, update at least:
@@ -397,7 +364,7 @@ For production, update at least:
 - Browser crypto APIs require HTTPS in production. Localhost is allowed by browsers, but public HTTP domains can fail.
 - `TOKEN_SECRET`, `HOST_API_KEY`, `DB_PASS`, and `HOST_STORAGE_API_KEY` must be changed before production use.
 - The OSS editor syncs active users with the same `file_id` through an in-memory realtime channel. A user must still click Save to persist the current drawing to the gateway/DMS.
-- Basic mode is for quick testing; advanced mode is the path for DMS integration.
+- The `deploy/` stack is the path for DMS integration.
 
 ## Docs
 
