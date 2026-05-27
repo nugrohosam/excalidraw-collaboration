@@ -32,6 +32,7 @@ function App() {
   const acceptedLocalChangeRef = useRef(false);
   const previousElementsRef = useRef(new Map());
   const previousFilesRef = useRef(new Map());
+  const pendingYjsUpdatesRef = useRef([]);
   const ydocRef = useRef(null);
   const yElementsRef = useRef(null);
   const yFilesRef = useRef(null);
@@ -63,6 +64,7 @@ function App() {
         acceptedLocalChangeRef.current = false;
         previousElementsRef.current = new Map();
         previousFilesRef.current = new Map();
+        pendingYjsUpdatesRef.current = [];
         ydocRef.current?.destroy();
         ydocRef.current = null;
         yElementsRef.current = null;
@@ -128,11 +130,15 @@ function App() {
     setCollabState({ status: "connecting", users: [] });
 
     ydoc.on("update", (update, origin) => {
-      if (origin === "remote" || !socket.connected || !fileInfo?.UserCanWrite) {
+      if (origin === "remote" || !fileInfo?.UserCanWrite) {
         return;
       }
 
-      socket.emit("yjs:update", update);
+      if (socket.connected) {
+        socket.emit("yjs:update", update);
+      } else {
+        pendingYjsUpdatesRef.current.push(update);
+      }
     });
 
     const observeYjsScene = (event) => {
@@ -147,6 +153,7 @@ function App() {
 
     socket.on("connect", () => {
       setCollabState((current) => ({ ...current, status: "online" }));
+      flushPendingYjsUpdates(socket);
     });
 
     socket.on("connect_error", (error) => {
@@ -452,6 +459,16 @@ function App() {
     if (socket?.connected) {
       socket.emit("pointer:update", { hidden: true });
     }
+  }
+
+  function flushPendingYjsUpdates(socket) {
+    if (!fileInfo?.UserCanWrite || pendingYjsUpdatesRef.current.length === 0) {
+      return;
+    }
+
+    const updates = pendingYjsUpdatesRef.current;
+    pendingYjsUpdatesRef.current = [];
+    socket.emit("yjs:update", updates.length === 1 ? updates[0] : Y.mergeUpdates(updates));
   }
 }
 
