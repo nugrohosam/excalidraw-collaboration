@@ -1,6 +1,7 @@
 services:
   app:
     image: alswl/excalidraw:v0.18.1-fork-b2
+    platform: linux/amd64
     restart: unless-stopped
     environment:
       - VITE_APP_BACKEND_V2_GET_URL=https://${STORAGE_BACKEND_HOST}/api/v2/scenes/
@@ -16,6 +17,7 @@ services:
 
   storage:
     image: alswl/excalidraw-storage-backend:v2023.11.11
+    platform: linux/amd64
     restart: unless-stopped
     environment:
       - STORAGE_URI=mongodb://${DB_USER}:${DB_PASS}@mongodb:27017
@@ -24,9 +26,41 @@ services:
 
   room:
     image: excalidraw/excalidraw-room:sha-49bf529
+    platform: linux/amd64
     restart: unless-stopped
     ports:
       - "9015:80"
+
+  file-editor:
+    build:
+      context: ../file-editor
+    restart: unless-stopped
+    ports:
+      - "9017:80"
+
+  file-gateway:
+    build:
+      context: ../file-gateway
+    restart: unless-stopped
+    environment:
+      - PORT=8090
+      - APP_PUBLIC_URL=https://${APP_HOST}
+      - EDITOR_OPEN_PATH=${EDITOR_OPEN_PATH:-/editor/}
+      - GATEWAY_PUBLIC_URL=https://${APP_HOST}
+      - HOST_API_KEY=${HOST_API_KEY}
+      - TOKEN_SECRET=${TOKEN_SECRET}
+      - TOKEN_TTL_SECONDS=${TOKEN_TTL_SECONDS}
+      - STORAGE_ADAPTER=${STORAGE_ADAPTER}
+      - FILESYSTEM_STORAGE_PATH=/data/files
+      - HOST_STORAGE_BASE_URL=${HOST_STORAGE_BASE_URL}
+      - HOST_STORAGE_API_KEY=${HOST_STORAGE_API_KEY}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - MAX_BODY_BYTES=${MAX_BODY_BYTES}
+      - LOCK_TTL_SECONDS=${LOCK_TTL_SECONDS}
+    volumes:
+      - ${FILE_STORAGE_PATH}:/data/files
+    ports:
+      - "9016:8090"
 
   mongodb:
     image: mongo:7.0.5-jammy

@@ -1,115 +1,406 @@
-# excalidraw-collaboration
+# Excalidraw Collaboration
 
-Demo:
+A self-hosted Excalidraw stack with live collaboration, scene/image storage, Docker Compose deployment, and an experimental OSS editor for DMS integration.
 
-[demo](https://excalidraw-production-1dbf.up.railway.app) on [Railway](https://railway.app?referralCode=HM_ZCO)
-(Please using the referral code help me get Railway credits to running the demo.)
+The core Excalidraw collaboration stack is usable today. The newer OSS/DMS path now supports opening a file through a wrapper, lightweight same-file realtime sync between wrapper users, and explicit Save back to the gateway/DMS.
 
-If the demo is down (sometime no free plan credits), you can one click to deploy your excalidraw with collaboration.
-[⁠![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/PjQnHs?referralCode=HM_ZCO&utm_medium=integration&utm_source=template&utm_campaign=generic)
+This repo has two deployment modes:
 
-[demo](https://excalidraw.zeabur.app/) on [Zeabur](https://zeabur.com/referral?referralCode=alswl)
-(Please using the referral code help me get Zeabur credits to running the demo.)
+- `basic/`: local Excalidraw collaboration demo.
+- `advanced-nginx/`: production-style deployment with HTTPS nginx routing, MongoDB-backed Excalidraw storage, the OSS gateway API, and the OSS editor wrapper.
 
-Snapshot:
+## Capability Status
 
-⁠![snapshot](./_assets/snapshot.png)
+Stable today:
 
-Related docs:
+- Self-hosted Excalidraw web app.
+- Live collaboration using Excalidraw's built-in collaboration flow.
+- Scene/image storage through the Excalidraw storage backend.
+- Basic Docker Compose deployment for local testing.
+- Advanced Docker Compose deployment with MongoDB and nginx routing.
 
-- [Self hosted online collaborative drawing platform Excalidraw | Log4D](https://en.blog.alswl.com/2022/10/self-hosted-excalidraw/)
-- [私有化在线协同画图平台 Excalidraw | Log4D](https://blog.alswl.com/2022/10/self-hosted-excalidraw/)
+Experimental OSS/DMS gateway:
 
-## Deploy (Basic)
+- Session token API.
+- File metadata and contents API.
+- Lightweight realtime sync channel for users editing the same `fileId` in the wrapper.
+- Save API with version checks.
+- Lock/unlock API.
+- Filesystem storage adapter.
+- HTTP adapter contract for calling a DMS.
+- Editor wrapper at `/editor/`.
 
-Clone, and run:
+Not built yet:
 
+- The OSS wrapper realtime sync is not Excalidraw's official end-to-end encrypted room protocol.
+- Remote changes are synced live in memory, but the file is persisted to DMS only when a user clicks Save.
+- Multi-user conflict handling is still basic: version checks protect saved files, but simultaneous explicit saves can still require user coordination.
 
-```
-git clone git@github.com:alswl/excalidraw-collaboration.git
-cd excalidraw-collaboration/basic
+## What Runs
 
-docker-compose up # run the containers
+| Service | Purpose |
+| --- | --- |
+| `app` / `frontend` | Excalidraw web app. |
+| `room` | WebSocket server for live collaboration. |
+| `storage` | Excalidraw scene/image storage backend. Basic mode uses memory; advanced mode uses MongoDB. |
+| `mongodb` | Persistent database for the Excalidraw storage backend in advanced mode. |
+| `file-gateway` | OSS gateway API for file sessions, metadata, contents, saves, locks, and DMS adapter calls. |
+| `file-editor` | Experimental wrapper that loads an OSS file, syncs same-file editors in realtime, and saves when the user clicks Save. |
 
-open "http://localhost" # open browser, and you can using the collbration functions
-```
+## Requirements
 
-Browse it:
+- Docker
+- Docker Compose v2
+- For advanced public deployment: a domain, HTTPS certificate, and nginx on the host
 
-- open [http://127.0.0.1/](http://127.0.0.1/) ,and you will see the excalidraw page
-- Click the `Live Collaboration` button, and you will see the collaboration page
-- Now you can share the collaboration page with your friends, and you can draw together.
+Check Docker:
 
-About public network release:
-
-if you want to release your own excalidraw in public network,
-you should modify the `docker-compose.yaml` file,
-Replace the `VITE_APP_HTTP_STORAGE_BACKEND_URL` and `VITE_APP_WS_SERVER_URL` with your own domain.
-
-## Advanced mode
-
-### advanced-nginx
-
-Features:
-
-- Setup with one domain, and use nginx to proxy the requests to the backend services
-- HTTPS support
-
-### traefik (not part of this repo)
-
-A configurable docker-compose example for a traefik setup can be found here:
-
-[https://github.com/Someone0nEarth/excalidraw-self-hosted](https://github.com/Someone0nEarth/excalidraw-self-hosted)
-
-## Roadmap
-
-- [x] self-host
-- [x] collaboration feature works
-- [x] docker-compose support
-- [x] no pre-build image, dynamic env
-- [x] upload Docker Hub image
-- [ ] S3 storage support
-- [ ] SSO support
-- [x] HTTPS Demo and
-- [x] HTTPS docs
-- [ ] Helm support
-- [x] online demo
-- [x] one click to deploy Railway
-
-## Upgrade Guide
-
-- v0.15.0 -> v0.16.1
-   - replace `REACT_APP_` env with `VITE_APP_`
-
-## Q & A
-
-### How to deploy on the cloud(aws etc)
-
-The `docker-compose.yaml` file is for local deploy, if you want to deploy on the cloud,
-you should prepare 2 Load Balancer(with HTTPS cert), one for websocket server, one for storage server.
-
-The `VITE_APP_HTTP_STORAGE_BACKEND_URL` is for the Load Balancer URL(HTTPS) for storage,
-and the `VITE_APP_WS_SERVER_URL` is for the Load Balancer URL(HTTPS) for websocket.
-
-Here is a conversation about how to deploy on the aws: [https://github.com/alswl/excalidraw-collaboration/issues/22](https://github.com/alswl/excalidraw-collaboration/issues/22)
-
-### generateKey problem
-
-Error message:
-
-
-```
-TypeError: Cannot read properties of undefined (reading 'generateKey')
+```bash
+docker --version
+docker compose version
 ```
 
-Why: The excalidraw is using crypto module of Javascript, the HTTPS is required.
+These commands confirm Docker and Compose are installed.
 
-How to solve: use HTTPS to access the page, or use [http://localhost](http://localhost) instead.
+## Run Basic Local Mode
 
-## Contributors
+Use this when you only want to try Excalidraw live collaboration locally.
 
-<a href="https://github.com/alswl/excalidraw-collaboration/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=alswl/excalidraw-collaboration" />
-</a>
+```bash
+docker compose -f basic/docker-compose.yaml up -d
+```
 
-&#8203;
+What it does:
+
+- Pulls the Excalidraw frontend image.
+- Pulls the Excalidraw storage backend image.
+- Pulls the Excalidraw room server image.
+- Starts the stack in the background.
+- Exposes Excalidraw on `http://localhost`.
+- Exposes storage on `http://localhost:8081`.
+- Exposes room server on `http://localhost:8082`.
+
+Open:
+
+```bash
+open http://localhost
+```
+
+If you are not on macOS, open `http://localhost` manually in your browser.
+
+View logs:
+
+```bash
+docker compose -f basic/docker-compose.yaml logs -f
+```
+
+Stop basic mode:
+
+```bash
+docker compose -f basic/docker-compose.yaml down
+```
+
+Important: basic mode storage is in-memory because `STORAGE_URI` is not configured. Data can disappear when the storage container restarts.
+
+## Run Advanced Mode Locally
+
+Use this when you want the full stack, including MongoDB and the OSS file gateway.
+
+1. Create your env file:
+
+```bash
+cp advanced-nginx/.env.example advanced-nginx/.env
+```
+
+What it does:
+
+- Copies the example environment variables to a real `.env` file.
+- Keeps your local secrets/config out of the template.
+
+2. Edit the env file:
+
+```bash
+nano advanced-nginx/.env
+```
+
+At minimum, change:
+
+```env
+APP_HOST=draw.example.com
+ROOM_HOST=draw.example.com
+STORAGE_BACKEND_HOST=draw.example.com/storage
+DB_PASS=change-me-mongodb-password
+TOKEN_SECRET=change-me-to-a-long-random-token-secret
+HOST_API_KEY=change-me-host-api-key
+ALLOWED_ORIGINS=https://draw.example.com
+```
+
+For local testing without nginx/domain, you can temporarily use:
+
+```env
+APP_HOST=localhost:9013
+ROOM_HOST=localhost:9015
+STORAGE_BACKEND_HOST=localhost:9014
+ALLOWED_ORIGINS=http://localhost:9013,http://localhost:9017
+```
+
+Direct local testing uses the editor on `http://localhost:9017` and passes `gateway_url=http://localhost:9016` in the URL. Production uses nginx so the public editor path is `/editor/` on the same domain.
+
+3. Validate the Compose file:
+
+```bash
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml config
+```
+
+What it does:
+
+- Reads `advanced-nginx/.env`.
+- Resolves all `${VARIABLE}` values in `compose.yml`.
+- Prints the final Docker Compose config.
+- Fails early if required variables are missing.
+
+4. Start the advanced stack:
+
+```bash
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml up -d --build
+```
+
+What it does:
+
+- Builds the local `file-gateway` image from `file-gateway/Dockerfile`.
+- Pulls the external Excalidraw, room, storage, and MongoDB images.
+- Starts all services in the background.
+- Exposes:
+  - Excalidraw app on `http://localhost:9013`
+  - Excalidraw storage on `http://localhost:9014`
+  - Room server on `http://localhost:9015`
+  - OSS file gateway on `http://localhost:9016`
+  - OSS editor on `http://localhost:9017`
+
+5. Check running containers:
+
+```bash
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml ps
+```
+
+What it does:
+
+- Shows each service status.
+- Helps confirm containers are `Up`.
+
+6. View logs:
+
+```bash
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml logs -f
+```
+
+What it does:
+
+- Streams logs from all services.
+- Useful when a service exits or nginx cannot reach a backend.
+
+Stop advanced mode:
+
+```bash
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml down
+```
+
+Stop and remove local data volumes/directories only if you intentionally want a clean reset.
+
+## Smoke Test the OSS Gateway
+
+After advanced mode is running, test the gateway directly on port `9016`:
+
+```bash
+curl http://localhost:9016/healthz
+```
+
+Expected result:
+
+```json
+{
+  "ok": true
+}
+```
+
+What it does:
+
+- Confirms the `file-gateway` service is alive.
+
+Check discovery:
+
+```bash
+curl http://localhost:9016/oss/discovery
+```
+
+What it does:
+
+- Returns the editor URL template used by the OSS editor.
+
+Create an editor session:
+
+```bash
+curl -X POST http://localhost:9016/api/files/demo/sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Gateway-Api-Key: change-me-host-api-key' \
+  -d '{"user":{"id":"user-1","name":"Demo User"},"permission":"edit","file":{"url":"https://dms.example.com/files/demo.excalidraw","name":"demo.excalidraw"}}'
+```
+
+What it does:
+
+- Asks the gateway to create a temporary browser access token for file `demo`.
+- Uses `X-Gateway-Api-Key` so only your host app/DMS can mint sessions.
+- Signs the DMS file URL/name into the temporary token.
+- Returns an `editorUrl` and `accessToken`.
+
+For local testing, open the returned `editorUrl` through the direct editor service:
+
+```text
+http://localhost:9017/?file_id=demo&access_token=PASTE_ACCESS_TOKEN_HERE&gateway_url=http://localhost:9016
+```
+
+What it does:
+
+- Loads the drawing through `/api/oss/files/demo/contents`.
+- Lets users with the same `file_id` draw together through the OSS realtime channel.
+- Shows remote cursor labels for other connected users.
+- Saves back through `/api/oss/files/demo/contents` only when the user clicks Save.
+
+Use the returned `accessToken` to check file info manually:
+
+```bash
+curl 'http://localhost:9016/api/oss/files/demo?access_token=PASTE_ACCESS_TOKEN_HERE'
+```
+
+What it does:
+
+- Confirms the token can access file metadata.
+- Creates a blank `.excalidraw` file automatically when using filesystem storage.
+
+## Test Two OSS Editor Users
+
+Create two sessions for the same `fileId`:
+
+```bash
+TOKEN1=$(curl -s -X POST http://localhost:9016/api/files/demo/sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Gateway-Api-Key: change-me-host-api-key' \
+  -d '{"user":{"id":"user-1","name":"User One"},"permission":"edit","file":{"url":"https://dms.example.com/files/demo.excalidraw","name":"demo.excalidraw"}}' | jq -r .accessToken)
+
+TOKEN2=$(curl -s -X POST http://localhost:9016/api/files/demo/sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Gateway-Api-Key: change-me-host-api-key' \
+  -d '{"user":{"id":"user-2","name":"User Two"},"permission":"edit","file":{"url":"https://dms.example.com/files/demo.excalidraw","name":"demo.excalidraw"}}' | jq -r .accessToken)
+
+echo "User 1: http://localhost:9017/?file_id=demo&access_token=$TOKEN1&gateway_url=http://localhost:9016"
+echo "User 2: http://localhost:9017/?file_id=demo&access_token=$TOKEN2&gateway_url=http://localhost:9016"
+```
+
+Open each URL in a different browser profile or private window.
+
+Expected behavior:
+
+- Both users show as online.
+- Scene changes sync between users in memory.
+- Remote cursor labels are visible.
+- The DMS/file storage is updated only when a user clicks **Save**.
+
+## Prepare DMS Integration
+
+The gateway can either store files locally or call your DMS. This prepares the backend side of the integration.
+
+Local filesystem mode:
+
+```env
+STORAGE_ADAPTER=filesystem
+FILE_STORAGE_PATH=./file-data
+```
+
+DMS HTTP mode:
+
+```env
+STORAGE_ADAPTER=http
+HOST_STORAGE_BASE_URL=https://dms.example.com/oss
+HOST_STORAGE_API_KEY=change-me-dms-api-key
+```
+
+When `STORAGE_ADAPTER=http`, the gateway calls your DMS:
+
+- `GET /files/:fileId`
+- `GET /files/:fileId/contents`
+- `PUT /files/:fileId/contents`
+- `POST /files/:fileId/lock`
+- `POST /files/:fileId/unlock`
+
+For every DMS call, the gateway forwards:
+
+- `Authorization: Bearer {HOST_STORAGE_API_KEY}`
+- `X-User-Id`
+- `X-User-Name`
+- `X-User-Permission`
+- `X-File-Url`
+- `X-File-Name`
+
+The full DMS API contract is in [docs/oss-api.md](./docs/oss-api.md).
+
+Important: setting `STORAGE_ADAPTER=http` makes the OSS gateway call your DMS when the wrapper loads or saves the file. Realtime edits are shared through the gateway's in-memory OSS socket channel; persistence still happens only on explicit Save.
+
+## Configure Nginx for Production
+
+Use [advanced-nginx/draw.example.com.conf](./advanced-nginx/draw.example.com.conf) as the nginx server block.
+
+It routes:
+
+- `/` to Excalidraw app on `127.0.0.1:9013`
+- `/storage/` to Excalidraw storage on `127.0.0.1:9014`
+- `/socket.io/` to room server on `127.0.0.1:9015`
+- `/oss/discovery`, `/api/files/`, `/api/oss/`, and `/oss-socket.io/` to file gateway on `127.0.0.1:9016`
+
+After placing the nginx config, test and reload nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+What it does:
+
+- `nginx -t` checks config syntax.
+- `systemctl reload nginx` reloads nginx without stopping active connections.
+
+## Deploy Checklist
+
+Before deploying:
+
+```bash
+cp advanced-nginx/.env.example advanced-nginx/.env
+nano advanced-nginx/.env
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml config
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml up -d --build
+docker compose --env-file advanced-nginx/.env -f advanced-nginx/compose.yml ps
+```
+
+For production, update at least:
+
+- `APP_HOST`
+- `ROOM_HOST`
+- `STORAGE_BACKEND_HOST`
+- `ALLOWED_ORIGINS`
+- `DB_PASS`
+- `TOKEN_SECRET`
+- `HOST_API_KEY`
+- `HOST_STORAGE_BASE_URL`
+- `HOST_STORAGE_API_KEY`
+
+## Important Notes
+
+- Browser crypto APIs require HTTPS in production. Localhost is allowed by browsers, but public HTTP domains can fail.
+- `TOKEN_SECRET`, `HOST_API_KEY`, `DB_PASS`, and `HOST_STORAGE_API_KEY` must be changed before production use.
+- The OSS editor syncs active users with the same `file_id` through an in-memory realtime channel. A user must still click Save to persist the current drawing to the gateway/DMS.
+- Basic mode is for quick testing; advanced mode is the path for DMS integration.
+
+## Docs
+
+- [OSS API Documentation](./docs/oss-api.md)
+- [Product Requirements Document](./docs/prd.md)
+- [Technical Design](./docs/technical-design.md)
