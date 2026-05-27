@@ -12,6 +12,7 @@ function App() {
   const fileId = params.get("file_id") || "";
   const accessToken = params.get("access_token") || "";
   const gatewayUrl = trimRight(params.get("gateway_url") || defaultGatewayUrl || window.location.origin);
+  const editorSessionKey = `${fileId}:${accessToken}`;
 
   const [fileInfo, setFileInfo] = useState(null);
   const [initialData, setInitialData] = useState(null);
@@ -41,6 +42,19 @@ function App() {
       }
 
       try {
+        setLoadState({ status: "loading", message: "Loading drawing..." });
+        setFileInfo(null);
+        setInitialData(null);
+        setSaveState({ status: "idle", message: "" });
+        setCollabState({ status: "offline", users: [] });
+        setRemotePointers({});
+        excalidrawApiRef.current = null;
+        latestSceneRef.current = null;
+        pendingRemoteSceneRef.current = null;
+        applyingRemoteRef.current = false;
+        window.clearTimeout(emitTimerRef.current);
+        window.clearTimeout(pointerTimerRef.current);
+
         const info = await gatewayJson(`${gatewayUrl}/api/oss/files/${encodeURIComponent(fileId)}`, accessToken);
         const contents = await gatewayJson(
           `${gatewayUrl}/api/oss/files/${encodeURIComponent(fileId)}/contents`,
@@ -230,6 +244,7 @@ function App() {
       </header>
       <section className="canvas-area" ref={pointerAreaRef} onPointerMove={handlePointerMove} onPointerLeave={handlePointerLeave}>
         <Excalidraw
+          key={editorSessionKey}
           excalidrawAPI={(api) => {
             excalidrawApiRef.current = api;
             if (pendingRemoteSceneRef.current) {
