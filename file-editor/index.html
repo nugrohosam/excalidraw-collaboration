@@ -7,6 +7,44 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        if (!("serviceWorker" in navigator)) {
+          return;
+        }
+
+        const reloadKey = "file-editor-service-worker-cleaned";
+
+        navigator.serviceWorker
+          .getRegistrations()
+          .then(async (registrations) => {
+            const controllingRegistrations = registrations.filter((registration) =>
+              window.location.href.startsWith(registration.scope)
+            );
+
+            if (controllingRegistrations.length === 0) {
+              return;
+            }
+
+            await Promise.all(controllingRegistrations.map((registration) => registration.unregister()));
+
+            if ("caches" in window) {
+              const cacheNames = await window.caches.keys();
+              await Promise.all(
+                cacheNames
+                  .filter((name) => /excalidraw|precache|workbox/i.test(name))
+                  .map((name) => window.caches.delete(name))
+              );
+            }
+
+            if (navigator.serviceWorker.controller && !window.sessionStorage.getItem(reloadKey)) {
+              window.sessionStorage.setItem(reloadKey, "1");
+              window.location.reload();
+            }
+          })
+          .catch(() => {});
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

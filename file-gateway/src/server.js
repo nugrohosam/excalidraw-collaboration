@@ -207,7 +207,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", async () => {
+  socket.on("disconnect", () => {
     socket.to(room).emit("pointer:leave", {
       fileId,
       user: {
@@ -216,10 +216,6 @@ io.on("connection", (socket) => {
       }
     });
     emitPresence(room, fileId);
-    const remainingSockets = await io.in(room).fetchSockets();
-    if (remainingSockets.length === 0) {
-      realtimeScenes.delete(fileId);
-    }
   });
 });
 
