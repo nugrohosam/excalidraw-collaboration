@@ -1,3 +1,5 @@
 deploy/file-data/
 deploy/mongo-data/
 .env
+node_modules
+dist

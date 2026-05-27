@@ -19,6 +19,7 @@ function App() {
   const [initialData, setInitialData] = useState(null);
   const [loadState, setLoadState] = useState({ status: "loading", message: "Loading drawing..." });
   const [saveState, setSaveState] = useState({ status: "idle", message: "" });
+  const [remoteSaveState, setRemoteSaveState] = useState(null);
   const [collabState, setCollabState] = useState({ status: "offline", users: [] });
   const [remotePointers, setRemotePointers] = useState({});
   const excalidrawApiRef = useRef(null);
@@ -53,6 +54,7 @@ function App() {
         setFileInfo(null);
         setInitialData(null);
         setSaveState({ status: "idle", message: "" });
+        setRemoteSaveState(null);
         setCollabState({ status: "offline", users: [] });
         setRemotePointers({});
         excalidrawApiRef.current = null;
@@ -172,6 +174,13 @@ function App() {
     socket.on("yjs:update", (update) => {
       Y.applyUpdate(ydoc, toUint8Array(update), "remote");
     });
+    socket.on("save:state", (state) => {
+      if (state?.active && state.ownerSocketId !== socket.id) {
+        setRemoteSaveState(state);
+      } else {
+        setRemoteSaveState(null);
+      }
+    });
     socket.on("pointer:update", (payload) => {
       if (!payload.user?.id || !payload.pointer) {
         return;
@@ -235,6 +244,10 @@ function App() {
       return;
     }
 
+    if (remoteSaveState?.active || saveState.status === "saving") {
+      return;
+    }
+
     if (!acceptedLocalChangeRef.current && initialSceneHadElementsRef.current && !hasAnyElements(elements)) {
       return;
     }
@@ -253,7 +266,7 @@ function App() {
     if (saveState.status === "saved") {
       setSaveState({ status: "idle", message: "" });
     }
-  }, [fileInfo?.UserCanWrite, saveState.status]);
+  }, [fileInfo?.UserCanWrite, remoteSaveState?.active, saveState.status]);
 
   const handleSave = useCallback(async () => {
     if (!latestSceneRef.current) {
@@ -262,8 +275,22 @@ function App() {
     }
 
     setSaveState({ status: "saving", message: "Saving..." });
+    let saveLockStarted = false;
 
     try {
+      if (socketRef.current?.connected) {
+        const lockResult = await emitWithAck(socketRef.current, "save:start");
+        if (!lockResult.ok) {
+          throw new Error(lockResult.error || "Another user is saving");
+        }
+        saveLockStarted = true;
+
+        if (lockResult.snapshot) {
+          Y.applyUpdate(ydocRef.current, toUint8Array(lockResult.snapshot), "remote");
+          applyYjsScene();
+        }
+      }
+
       const response = await fetch(`${gatewayUrl}/api/oss/files/${encodeURIComponent(fileId)}/contents`, {
         method: "PUT",
         headers: {
@@ -292,6 +319,10 @@ function App() {
       });
     } catch (error) {
       setSaveState({ status: "error", message: error.message });
+    } finally {
+      if (saveLockStarted) {
+        socketRef.current?.emit("save:end");
+      }
     }
   }, [accessToken, fileId, fileInfo?.Version, gatewayUrl]);
 
@@ -306,6 +337,8 @@ function App() {
     );
   }
 
+  const saveFreezeActive = saveState.status === "saving" || Boolean(remoteSaveState?.active);
+
   return (
     <main className="editor-shell">
       <header className="toolbar">
@@ -316,8 +349,10 @@ function App() {
           </span>
         </div>
         <div className="actions">
-          <span className={saveState.status === "error" ? "error-text" : "status-text"}>{saveState.message}</span>
-          <button type="button" onClick={handleSave} disabled={saveState.status === "saving" || !fileInfo?.UserCanWrite}>
+          <span className={saveState.status === "error" ? "error-text" : "status-text"}>
+            {remoteSaveState?.active ? `${remoteSaveState.user?.name || "Another user"} is saving...` : saveState.message}
+          </span>
+          <button type="button" onClick={handleSave} disabled={saveFreezeActive || !fileInfo?.UserCanWrite}>
             {saveState.status === "saving" ? "Saving..." : "Save"}
           </button>
         </div>
@@ -333,7 +368,7 @@ function App() {
           }}
           initialData={initialData}
           onChange={handleChange}
-          viewModeEnabled={!fileInfo?.UserCanWrite}
+          viewModeEnabled={!fileInfo?.UserCanWrite || saveFreezeActive}
         />
         <RemotePointers pointers={remotePointers} />
       </section>
@@ -559,7 +594,12 @@ function mergeElementsById(currentElements, incomingElements) {
   const merged = elementsById(currentElements || []);
 
   for (const element of incomingElements || []) {
-    if (element?.id) {
+    if (!element?.id) {
+      continue;
+    }
+
+    const currentElement = merged.get(element.id);
+    if (!currentElement || isElementNewer(element, currentElement)) {
       merged.set(element.id, cloneData(element));
     }
   }
@@ -645,6 +685,19 @@ function trimRight(value) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function emitWithAck(socket, event, payload) {
+  return new Promise((resolve) => {
+    socket.timeout(5000).emit(event, payload, (error, response) => {
+      if (error) {
+        resolve({ ok: false, error: "Realtime save lock timed out" });
+        return;
+      }
+
+      resolve(response || { ok: true });
+    });
+  });
 }
 
 function userColor(userId) {
