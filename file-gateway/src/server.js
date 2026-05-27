@@ -134,7 +134,6 @@ const server = createServer(async (req, res) => {
 });
 
 const realtimeDocs = new Map();
-const realtimeSaveStates = new Map();
 const io = new SocketIOServer(server, {
   path: "/oss-socket.io",
   maxHttpBufferSize: config.maxBodyBytes,
@@ -171,18 +170,12 @@ io.on("connection", (socket) => {
 
   const ydoc = getRealtimeDoc(fileId);
   socket.emit("yjs:sync", Y.encodeStateAsUpdate(ydoc));
-  socket.emit("save:state", getRealtimeSaveState(fileId));
 
   emitPresence(room, fileId);
 
   socket.on("yjs:update", (update, ack) => {
     if (claims.permission !== "edit") {
       ack?.({ ok: false, error: "Token does not allow realtime updates" });
-      return;
-    }
-
-    if (getRealtimeSaveState(fileId)?.active) {
-      ack?.({ ok: false, error: "Room is saving" });
       return;
     }
 
@@ -194,42 +187,6 @@ io.on("connection", (socket) => {
     } catch (error) {
       ack?.({ ok: false, error: error.message || "Invalid Yjs update" });
     }
-  });
-
-  socket.on("save:start", (_payload, ack) => {
-    if (claims.permission !== "edit") {
-      ack?.({ ok: false, error: "Token does not allow saves" });
-      return;
-    }
-
-    const currentState = getRealtimeSaveState(fileId);
-    if (currentState?.active) {
-      ack?.({ ok: false, error: "Another user is saving" });
-      return;
-    }
-
-    const state = {
-      active: true,
-      ownerSocketId: socket.id,
-      user: {
-        id: claims.userId,
-        name: claims.userName
-      },
-      startedAt: new Date().toISOString()
-    };
-    realtimeSaveStates.set(fileId, state);
-    io.to(room).emit("save:state", state);
-    ack?.({ ok: true, snapshot: Y.encodeStateAsUpdate(ydoc), state });
-  });
-
-  socket.on("save:end", () => {
-    const currentState = getRealtimeSaveState(fileId);
-    if (currentState?.ownerSocketId !== socket.id) {
-      return;
-    }
-
-    realtimeSaveStates.delete(fileId);
-    io.to(room).emit("save:state", null);
   });
 
   socket.on("pointer:update", (pointer) => {
@@ -245,12 +202,6 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", async () => {
-    const currentState = getRealtimeSaveState(fileId);
-    if (currentState?.ownerSocketId === socket.id) {
-      realtimeSaveStates.delete(fileId);
-      io.to(room).emit("save:state", null);
-    }
-
     socket.to(room).emit("pointer:leave", {
       fileId,
       user: {
@@ -264,7 +215,6 @@ io.on("connection", (socket) => {
       const roomDoc = realtimeDocs.get(fileId);
       roomDoc?.destroy();
       realtimeDocs.delete(fileId);
-      realtimeSaveStates.delete(fileId);
     }
   });
 });
@@ -298,10 +248,6 @@ function getRealtimeDoc(fileId) {
     realtimeDocs.set(fileId, ydoc);
   }
   return ydoc;
-}
-
-function getRealtimeSaveState(fileId) {
-  return realtimeSaveStates.get(fileId) || null;
 }
 
 function toUint8Array(value) {
