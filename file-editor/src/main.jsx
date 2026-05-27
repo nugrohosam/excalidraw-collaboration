@@ -32,6 +32,8 @@ function App() {
   const loadedInitialSceneRef = useRef(false);
   const acceptedLocalChangeRef = useRef(false);
   const lastEmittedSceneHashRef = useRef("");
+  const previousElementsRef = useRef(new Map());
+  const previousFilesRef = useRef(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +62,8 @@ function App() {
         loadedInitialSceneRef.current = false;
         acceptedLocalChangeRef.current = false;
         lastEmittedSceneHashRef.current = "";
+        previousElementsRef.current = new Map();
+        previousFilesRef.current = new Map();
         window.clearTimeout(emitTimerRef.current);
         window.clearTimeout(pointerTimerRef.current);
 
@@ -81,6 +85,8 @@ function App() {
         });
         latestSceneRef.current = normalizeScene(contents);
         initialSceneHadElementsRef.current = hasAnyElements(contents.elements);
+        previousElementsRef.current = elementsById(contents.elements || []);
+        previousFilesRef.current = filesById(contents.files || {});
         loadedInitialSceneRef.current = true;
         setLoadState({ status: "ready", message: "" });
       } catch (error) {
@@ -130,6 +136,7 @@ function App() {
 
     socket.on("scene:sync", applyRemoteScene);
     socket.on("scene:update", applyRemoteScene);
+    socket.on("scene:patch", applyRemotePatch);
     socket.on("pointer:update", (payload) => {
       if (!payload.user?.id || !payload.pointer) {
         return;
@@ -179,6 +186,8 @@ function App() {
     if (applyingRemoteRef.current) {
       applyingRemoteRef.current = false;
       latestSceneRef.current = scene;
+      previousElementsRef.current = elementsById(elements);
+      previousFilesRef.current = filesById(files || {});
       acceptedLocalChangeRef.current = true;
       return;
     }
@@ -188,8 +197,18 @@ function App() {
     }
 
     latestSceneRef.current = scene;
+    const changedElements = changedElementsSince(previousElementsRef.current, elements);
+    const changedFiles = changedFilesSince(previousFilesRef.current, files || {});
+    previousElementsRef.current = elementsById(elements);
+    previousFilesRef.current = filesById(files || {});
     acceptedLocalChangeRef.current = true;
-    queueRealtimeScene(scene);
+    queueRealtimePatch({
+      type: "excalidraw-patch",
+      version: 1,
+      source: "excalidraw-oss-editor",
+      elements: changedElements,
+      files: changedFiles
+    });
 
     if (saveState.status === "saved") {
       setSaveState({ status: "idle", message: "" });
@@ -296,11 +315,15 @@ function App() {
         files: scene.files || {}
       });
       latestSceneRef.current = normalizeScene(scene);
+      previousElementsRef.current = elementsById(scene.elements || []);
+      previousFilesRef.current = filesById(scene.files || {});
       return;
     }
 
     applyingRemoteRef.current = true;
     latestSceneRef.current = normalizeScene(scene);
+    previousElementsRef.current = elementsById(scene.elements || []);
+    previousFilesRef.current = filesById(scene.files || {});
 
     if (scene.files && typeof excalidrawApiRef.current.addFiles === "function") {
       excalidrawApiRef.current.addFiles(Object.values(scene.files));
@@ -311,20 +334,56 @@ function App() {
     });
   }
 
-  function queueRealtimeScene(scene) {
+  function applyRemotePatch(payload) {
+    const patch = payload.patch || payload;
+    if (!patch || !Array.isArray(patch.elements) || patch.elements.length === 0) {
+      return;
+    }
+
+    const currentElements =
+      typeof excalidrawApiRef.current?.getSceneElements === "function"
+        ? excalidrawApiRef.current.getSceneElements()
+        : latestSceneRef.current?.elements || [];
+    const mergedElements = mergeElements(currentElements, patch.elements);
+
+    applyingRemoteRef.current = true;
+    previousElementsRef.current = elementsById(mergedElements);
+    previousFilesRef.current = filesById({
+      ...(latestSceneRef.current?.files || {}),
+      ...(patch.files || {})
+    });
+    latestSceneRef.current = {
+      ...(latestSceneRef.current || normalizeScene({})),
+      elements: mergedElements,
+      files: {
+        ...(latestSceneRef.current?.files || {}),
+        ...(patch.files || {})
+      }
+    };
+
+    if (patch.files && typeof excalidrawApiRef.current?.addFiles === "function") {
+      excalidrawApiRef.current.addFiles(Object.values(patch.files));
+    }
+
+    excalidrawApiRef.current?.updateScene({
+      elements: mergedElements
+    });
+  }
+
+  function queueRealtimePatch(patch) {
     const socket = socketRef.current;
     if (!socket?.connected || !fileInfo?.UserCanWrite) {
       return;
     }
 
-    const sceneHash = realtimeSceneHash(scene);
-    if (sceneHash === lastEmittedSceneHashRef.current || !hasAnyElements(scene.elements)) {
+    const sceneHash = realtimeSceneHash(patch);
+    if (sceneHash === lastEmittedSceneHashRef.current || !hasAnyElements(patch.elements)) {
       return;
     }
 
     window.clearTimeout(emitTimerRef.current);
     emitTimerRef.current = window.setTimeout(() => {
-      socket.emit("scene:update", realtimeScene(scene));
+      socket.emit("scene:patch", patch);
       lastEmittedSceneHashRef.current = sceneHash;
     }, 250);
   }
@@ -408,21 +467,91 @@ function normalizeScene(contents) {
   };
 }
 
-function realtimeScene(scene) {
-  return {
-    type: scene.type,
-    version: scene.version,
-    source: scene.source,
-    elements: scene.elements || [],
-    files: scene.files || {}
-  };
-}
-
 function realtimeSceneHash(scene) {
   return JSON.stringify({
     elements: scene.elements || [],
     files: scene.files || {}
   });
+}
+
+function elementsById(elements) {
+  const map = new Map();
+  for (const element of elements || []) {
+    if (element?.id) {
+      map.set(element.id, element);
+    }
+  }
+  return map;
+}
+
+function filesById(files) {
+  const map = new Map();
+  for (const [id, file] of Object.entries(files || {})) {
+    map.set(id, file);
+  }
+  return map;
+}
+
+function changedElementsSince(previousElements, elements) {
+  const changedElements = [];
+
+  for (const element of elements || []) {
+    if (!element?.id) {
+      continue;
+    }
+
+    const previousElement = previousElements.get(element.id);
+    if (!previousElement || isElementNewer(element, previousElement) || elementHash(element) !== elementHash(previousElement)) {
+      changedElements.push(element);
+    }
+  }
+
+  return changedElements;
+}
+
+function changedFilesSince(previousFiles, files) {
+  const changedFiles = {};
+
+  for (const [id, file] of Object.entries(files || {})) {
+    const previousFile = previousFiles.get(id);
+    if (!previousFile || elementHash(file) !== elementHash(previousFile)) {
+      changedFiles[id] = file;
+    }
+  }
+
+  return changedFiles;
+}
+
+function mergeElements(currentElements, patchElements) {
+  const merged = elementsById(currentElements || []);
+
+  for (const element of patchElements || []) {
+    if (!element?.id) {
+      continue;
+    }
+
+    const currentElement = merged.get(element.id);
+    if (!currentElement || isElementNewer(element, currentElement)) {
+      merged.set(element.id, element);
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+function isElementNewer(nextElement, currentElement) {
+  const nextVersion = Number(nextElement.version || 0);
+  const currentVersion = Number(currentElement.version || 0);
+
+  if (nextVersion !== currentVersion) {
+    return nextVersion > currentVersion;
+  }
+
+  return Number(nextElement.versionNonce || 0) !== Number(currentElement.versionNonce || 0);
+}
+
+function elementHash(element) {
+  return JSON.stringify(element || {});
 }
 
 function hasAnyElements(elements) {

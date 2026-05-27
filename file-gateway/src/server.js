@@ -168,26 +168,30 @@ io.on("connection", (socket) => {
 
   socket.join(room);
 
-  const currentScene = realtimeScenes.get(fileId);
-  if (currentScene) {
-    socket.emit("scene:sync", currentScene);
+  const currentState = realtimeScenes.get(fileId);
+  if (currentState) {
+    socket.emit("scene:patch", realtimeStatePayload(currentState));
   }
 
   emitPresence(room, fileId);
 
-  socket.on("scene:update", (scene, ack) => {
+  function handleRealtimePatch(patch, ack) {
     if (claims.permission !== "edit") {
       ack?.({ ok: false, error: "Token does not allow realtime edits" });
       return;
     }
 
-    if (isEmptyRealtimeScene(scene)) {
+    if (isEmptyRealtimePatch(patch)) {
       ack?.({ ok: true, ignored: true });
       return;
     }
 
+    const currentState = realtimeScenes.get(fileId) || createRealtimeState();
+    const merged = mergeRealtimePatch(currentState, patch);
+    realtimeScenes.set(fileId, currentState);
+
     const payload = {
-      scene,
+      patch: merged,
       updatedAt: new Date().toISOString(),
       user: {
         id: claims.userId,
@@ -195,9 +199,16 @@ io.on("connection", (socket) => {
       }
     };
 
-    realtimeScenes.set(fileId, payload);
-    socket.to(room).emit("scene:update", payload);
-    ack?.({ ok: true });
+    if (!isEmptyRealtimePatch(merged)) {
+      socket.to(room).emit("scene:patch", payload);
+    }
+    ack?.({ ok: true, accepted: merged.elements.length });
+  }
+
+  socket.on("scene:patch", handleRealtimePatch);
+
+  socket.on("scene:update", (scene, ack) => {
+    handleRealtimePatch(scene, ack);
   });
 
   socket.on("pointer:update", (pointer) => {
@@ -250,8 +261,74 @@ function realtimeRoom(fileId) {
   return `oss:file:${fileId}`;
 }
 
-function isEmptyRealtimeScene(scene) {
-  return !scene || !Array.isArray(scene.elements) || scene.elements.length === 0;
+function createRealtimeState() {
+  return {
+    elements: new Map(),
+    files: {},
+    updatedAt: null
+  };
+}
+
+function realtimeStatePayload(state) {
+  return {
+    patch: {
+      type: "excalidraw-patch",
+      version: 1,
+      source: "excalidraw-oss-editor",
+      elements: Array.from(state.elements.values()),
+      files: state.files
+    },
+    updatedAt: state.updatedAt
+  };
+}
+
+function mergeRealtimePatch(state, patch) {
+  const acceptedElements = [];
+  const patchElements = Array.isArray(patch?.elements) ? patch.elements : [];
+
+  for (const element of patchElements) {
+    if (!element?.id) {
+      continue;
+    }
+
+    const currentElement = state.elements.get(element.id);
+    if (!currentElement || isElementNewer(element, currentElement)) {
+      state.elements.set(element.id, element);
+      acceptedElements.push(element);
+    }
+  }
+
+  const files = patch?.files && typeof patch.files === "object" ? patch.files : {};
+  state.files = {
+    ...state.files,
+    ...files
+  };
+  state.updatedAt = new Date().toISOString();
+
+  return {
+    type: "excalidraw-patch",
+    version: 1,
+    source: "excalidraw-oss-editor",
+    elements: acceptedElements,
+    files
+  };
+}
+
+function isElementNewer(nextElement, currentElement) {
+  const nextVersion = Number(nextElement.version || 0);
+  const currentVersion = Number(currentElement.version || 0);
+
+  if (nextVersion !== currentVersion) {
+    return nextVersion > currentVersion;
+  }
+
+  return Number(nextElement.versionNonce || 0) !== Number(currentElement.versionNonce || 0);
+}
+
+function isEmptyRealtimePatch(patch) {
+  const hasElements = Array.isArray(patch?.elements) && patch.elements.length > 0;
+  const hasFiles = patch?.files && typeof patch.files === "object" && Object.keys(patch.files).length > 0;
+  return !hasElements && !hasFiles;
 }
 
 async function emitPresence(room, fileId) {
