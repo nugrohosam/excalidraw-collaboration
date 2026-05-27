@@ -1,4 +1,3 @@
-advanced-nginx/.env
-advanced-nginx/file-data/
-advanced-nginx/mongo-data/
+deploy/file-data/
+deploy/mongo-data/
 .env
